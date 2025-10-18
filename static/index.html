@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>status</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Status</h1>
+            <div class="header-controls">
+                <div class="status-summary">
+                    <div class="summary-item">
+                        <div class="summary-label">Total</div>
+                        <div class="summary-value" id="total-count">0</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-label">Up</div>
+                        <div class="summary-value up" id="up-count">0</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-label">Down</div>
+                        <div class="summary-value down" id="down-count">0</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-label">Uptime</div>
+                        <div class="summary-value" id="avg-uptime">0%</div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                    <div class="connection-status">
+                        <div class="connection-dot" id="connection-dot"></div>
+                        <span id="connection-status">Connected</span>
+                    </div>
+                    <div class="time-range">
+                        <button class="time-btn active" data-hours="24">24h</button>
+                        <button class="time-btn" data-hours="168">7d</button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div id="content">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Loading instances...</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="badge-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">Embed Badge</div>
+                <button class="modal-close" onclick="closeBadgeModal()">&times;</button>
+            </div>
+            <div>
+                <div style="margin-bottom: 1rem;">
+                    <div style="font-size: 0.75rem; color: #666; margin-bottom: 0.5rem;">Image URL</div>
+                    <div class="badge-code" id="badge-url"></div>
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <div style="font-size: 0.75rem; color: #666; margin-bottom: 0.5rem;">Markdown</div>
+                    <div class="badge-code" id="badge-markdown"></div>
+                </div>
+                <div>
+                    <div style="font-size: 0.75rem; color: #666; margin-bottom: 0.5rem;">HTML</div>
+                    <div class="badge-code" id="badge-html"></div>
+                </div>
+                <div class="badge-preview" id="badge-preview"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
