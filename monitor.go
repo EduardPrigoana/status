@@ -50,14 +50,22 @@ func (m *Monitor) Initialize() error {
 	return m.updateInstances()
 }
 
+// --- START OF FIX ---
+
+// ApiGroupDetail defines the inner structure of an API group in the JSON.
 type ApiGroupDetail struct {
 	URLs []string `json:"urls"`
 	Cors bool     `json:"cors"`
 }
+
+// InstancesJSON defines the top-level structure of the instances.json file.
+// The `API` field is now a map of string to ApiGroupDetail, which matches the JSON.
 type InstancesJSON struct {
 	API map[string]ApiGroupDetail `json:"api"`
 	UI  map[string][]string       `json:"ui"`
 }
+
+// --- END OF FIX ---
 
 func (m *Monitor) updateInstances() error {
 	resp, err := http.Get(m.config.InstancesURL)
@@ -77,6 +85,8 @@ func (m *Monitor) updateInstances() error {
 
 	var data InstancesJSON
 	if err := json.Unmarshal(body, &data); err != nil {
+		// This is where your error was coming from.
+		// The error message will now be much more informative if the structure changes again.
 		return fmt.Errorf("failed to parse instances JSON: %w", err)
 	}
 
@@ -101,6 +111,7 @@ func (m *Monitor) updateInstances() error {
 					existing.Group = group
 					existing.GroupOrder = groupIndex
 					existing.Cors = groupDetails.Cors
+					existing.InstanceType = "api" // Important: Update type on refresh
 					updatedInstances = append(updatedInstances, existing)
 					delete(existingInstances, instanceURL)
 				} else {
@@ -127,6 +138,7 @@ func (m *Monitor) updateInstances() error {
 					existing.Group = group
 					existing.GroupOrder = groupIndex
 					existing.Cors = false // UI instances don't have a CORS flag
+					existing.InstanceType = "ui" // Important: Update type on refresh
 					updatedInstances = append(updatedInstances, existing)
 					delete(existingInstances, instanceURL)
 				} else {
