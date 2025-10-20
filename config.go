@@ -9,24 +9,26 @@ import (
 )
 
 type Config struct {
-	Port                string
-	CheckInterval       time.Duration
-	InstancesURL        string
-	RequestTimeout      time.Duration
-	MaxCheckHistory     int
-	SSEKeepaliveSeconds int
-	LogLevel            string
+	Port                    string
+	CheckInterval           time.Duration
+	InstancesURL            string
+	RequestTimeout          time.Duration
+	MaxCheckHistory         int
+	SSEKeepaliveSeconds     int
+	LogLevel                string
+	InstanceRefreshInterval time.Duration
 }
 
 func LoadConfig() *Config {
 	config := &Config{
-		Port:                getEnv("PORT", "8080"),
-		CheckInterval:       getCheckInterval(),
-		InstancesURL:        getEnv("INSTANCES_URL", "https://raw.githubusercontent.com/EduardPrigoana/hifi-instances/refs/heads/main/instances.json"),
-		RequestTimeout:      getTimeout(),
-		MaxCheckHistory:     getMaxHistory(),
-		SSEKeepaliveSeconds: getSSEKeepalive(),
-		LogLevel:            getEnv("LOG_LEVEL", "info"),
+		Port:                    getEnv("PORT", "8080"),
+		CheckInterval:           getCheckInterval(),
+		InstancesURL:            getEnv("INSTANCES_URL", "https://raw.githubusercontent.com/EduardPrigoana/hifi-instances/refs/heads/main/instances.json"),
+		RequestTimeout:          getTimeout(),
+		MaxCheckHistory:         getMaxHistory(),
+		SSEKeepaliveSeconds:     getSSEKeepalive(),
+		LogLevel:                getEnv("LOG_LEVEL", "info"),
+		InstanceRefreshInterval: getInstanceRefreshInterval(),
 	}
 
 	if !strings.HasPrefix(config.Port, ":") {
@@ -58,6 +60,26 @@ func getCheckInterval() time.Duration {
 	if minutes < 1 {
 		log.Printf("CHECK_INTERVAL_MINUTES must be at least 1, using default 60 minutes")
 		return 60 * time.Minute
+	}
+
+	return time.Duration(minutes) * time.Minute
+}
+
+func getInstanceRefreshInterval() time.Duration {
+	intervalStr := os.Getenv("INSTANCE_REFRESH_INTERVAL_MINUTES")
+	if intervalStr == "" {
+		return 10 * time.Minute
+	}
+
+	minutes, err := strconv.Atoi(intervalStr)
+	if err != nil {
+		log.Printf("Invalid INSTANCE_REFRESH_INTERVAL_MINUTES value '%s', using default 10 minutes", intervalStr)
+		return 10 * time.Minute
+	}
+
+	if minutes < 1 {
+		log.Printf("INSTANCE_REFRESH_INTERVAL_MINUTES must be at least 1, using default 10 minutes")
+		return 10 * time.Minute
 	}
 
 	return time.Duration(minutes) * time.Minute
@@ -113,6 +135,7 @@ func (c *Config) LogConfig() {
 	log.Printf("  Port: %s", c.Port)
 	log.Printf("  Check Interval: %v", c.CheckInterval)
 	log.Printf("  Instances URL: %s", c.InstancesURL)
+	log.Printf("  Instance Refresh Interval: %v", c.InstanceRefreshInterval)
 	log.Printf("  Request Timeout: %v", c.RequestTimeout)
 	log.Printf("  Max Check History: %d", c.MaxCheckHistory)
 	log.Printf("  SSE Keepalive: %ds", c.SSEKeepaliveSeconds)
