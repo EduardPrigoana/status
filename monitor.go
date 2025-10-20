@@ -1,418 +1,143 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"io"
 	"log"
-	"net/http"
+	"os"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
-type Instance struct {
-	Group        string  `json:"group"`
-	URL          string  `json:"url"`
-	InstanceType string  `json:"instance_type"`
-	GroupOrder   int     `json:"group_order"`
-	Index        int     `json:"index"`
-	Checks       []Check `json:"checks"`
-	mu           sync.RWMutex
+type Config struct {
+	Port                    string
+	CheckInterval           time.Duration
+	InstancesURL            string
+	RequestTimeout          time.Duration
+	MaxCheckHistory         int
+	SSEKeepaliveSeconds     int
+	LogLevel                string
+	InstanceRefreshInterval time.Duration
 }
 
-type Check struct {
-	Timestamp    time.Time `json:"timestamp"`
-	StatusCode   int       `json:"status_code"`
-	ResponseTime int64     `json:"response_time"`
-	Success      bool      `json:"success"`
-	Error        string    `json:"error,omitempty"`
-}
-
-type Monitor struct {
-	instances []*Instance
-	clients   map[chan []byte]bool
-	config    *Config
-	mu        sync.RWMutex
-	clientsMu sync.RWMutex
-}
-
-func NewMonitor(config *Config) *Monitor {
-	return &Monitor{
-		instances: make([]*Instance, 0),
-		clients:   make(map[chan []byte]bool),
-		config:    config,
+func LoadConfig() *Config {
+	config := &Config{
+		Port:                    getEnv("PORT", "8080"),
+		CheckInterval:           getCheckInterval(),
+		InstancesURL:            getEnv("INSTANCES_URL", "https://raw.githubusercontent.com/EduardPrigoana/hifi-instances/refs/heads/main/instances.json"),
+		RequestTimeout:          getTimeout(),
+		MaxCheckHistory:         getMaxHistory(),
+		SSEKeepaliveSeconds:     getSSEKeepalive(),
+		LogLevel:                getEnv("LOG_LEVEL", "info"),
+		InstanceRefreshInterval: getInstanceRefreshInterval(),
 	}
+
+	if !strings.HasPrefix(config.Port, ":") {
+		config.Port = ":" + config.Port
+	}
+
+	return config
 }
 
-func (m *Monitor) Initialize() error {
-	resp, err := http.Get(m.config.InstancesURL)
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func getCheckInterval() time.Duration {
+	intervalStr := os.Getenv("CHECK_INTERVAL_MINUTES")
+	if intervalStr == "" {
+		return 60 * time.Minute
+	}
+
+	minutes, err := strconv.Atoi(intervalStr)
 	if err != nil {
-		return fmt.Errorf("failed to fetch instances: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		log.Printf("Invalid CHECK_INTERVAL_MINUTES value '%s', using default 60 minutes", intervalStr)
+		return 60 * time.Minute
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	if minutes < 1 {
+		log.Printf("CHECK_INTERVAL_MINUTES must be at least 1, using default 60 minutes")
+		return 60 * time.Minute
+	}
+
+	return time.Duration(minutes) * time.Minute
+}
+
+func getInstanceRefreshInterval() time.Duration {
+	intervalStr := os.Getenv("INSTANCE_REFRESH_INTERVAL_MINUTES")
+	if intervalStr == "" {
+		return 10 * time.Minute
+	}
+
+	minutes, err := strconv.Atoi(intervalStr)
 	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
+		log.Printf("Invalid INSTANCE_REFRESH_INTERVAL_MINUTES value '%s', using default 10 minutes", intervalStr)
+		return 10 * time.Minute
 	}
 
-	var data struct {
-		API map[string][]string `json:"api"`
-		UI  map[string][]string `json:"ui"`
+	if minutes < 1 {
+		log.Printf("INSTANCE_REFRESH_INTERVAL_MINUTES must be at least 1, using default 10 minutes")
+		return 10 * time.Minute
 	}
 
-	if err := json.Unmarshal(body, &data); err != nil {
-		return fmt.Errorf("failed to parse JSON: %w", err)
-	}
-
-	apiOrder := extractOrderFromJSON(string(body), "api")
-	uiOrder := extractOrderFromJSON(string(body), "ui")
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	groupIndex := 0
-	instanceIndex := 1
-
-	for _, group := range apiOrder {
-		urls := data.API[group]
-		for _, instanceURL := range urls {
-			instance := &Instance{
-				Group:        group,
-				URL:          instanceURL,
-				InstanceType: "api",
-				GroupOrder:   groupIndex,
-				Index:        instanceIndex,
-				Checks:       make([]Check, 0, m.config.MaxCheckHistory),
-			}
-			m.instances = append(m.instances, instance)
-			instanceIndex++
-		}
-		groupIndex++
-	}
-
-	for _, group := range uiOrder {
-		urls := data.UI[group]
-		for _, instanceURL := range urls {
-			instance := &Instance{
-				Group:        group,
-				URL:          instanceURL,
-				InstanceType: "ui",
-				GroupOrder:   groupIndex,
-				Index:        instanceIndex,
-				Checks:       make([]Check, 0, m.config.MaxCheckHistory),
-			}
-			m.instances = append(m.instances, instance)
-			instanceIndex++
-		}
-		groupIndex++
-	}
-
-	log.Printf("Initialized %d instances", len(m.instances))
-	return nil
+	return time.Duration(minutes) * time.Minute
 }
 
-func extractOrderFromJSON(jsonStr string, section string) []string {
-	sectionStart := strings.Index(jsonStr, "\""+section+"\"")
-	if sectionStart == -1 {
-		return []string{}
+func getTimeout() time.Duration {
+	timeoutStr := os.Getenv("REQUEST_TIMEOUT_SECONDS")
+	if timeoutStr == "" {
+		return 30 * time.Second
 	}
 
-	braceStart := strings.Index(jsonStr[sectionStart:], "{")
-	if braceStart == -1 {
-		return []string{}
-	}
-	braceStart += sectionStart
-
-	braceCount := 1
-	braceEnd := braceStart + 1
-	for braceEnd < len(jsonStr) && braceCount > 0 {
-		if jsonStr[braceEnd] == '{' {
-			braceCount++
-		} else if jsonStr[braceEnd] == '}' {
-			braceCount--
-		}
-		braceEnd++
+	seconds, err := strconv.Atoi(timeoutStr)
+	if err != nil || seconds < 1 {
+		log.Printf("Invalid REQUEST_TIMEOUT_SECONDS, using default 30 seconds")
+		return 30 * time.Second
 	}
 
-	sectionJSON := jsonStr[braceStart:braceEnd]
-
-	var order []string
-	var groups map[string]interface{}
-	json.Unmarshal([]byte(sectionJSON), &groups)
-
-	pos := 0
-	for len(order) < len(groups) {
-		earliestPos := len(sectionJSON)
-		earliestKey := ""
-
-		for key := range groups {
-			alreadyAdded := false
-			for _, addedKey := range order {
-				if addedKey == key {
-					alreadyAdded = true
-					break
-				}
-			}
-			if alreadyAdded {
-				continue
-			}
-
-			searchStr := "\"" + key + "\""
-			foundPos := strings.Index(sectionJSON[pos:], searchStr)
-			if foundPos != -1 {
-				foundPos += pos
-				if foundPos < earliestPos {
-					earliestPos = foundPos
-					earliestKey = key
-				}
-			}
-		}
-
-		if earliestKey != "" {
-			order = append(order, earliestKey)
-			pos = earliestPos + len(earliestKey) + 2
-		} else {
-			break
-		}
-	}
-
-	return order
+	return time.Duration(seconds) * time.Second
 }
 
-func (m *Monitor) Start() {
-	m.checkAll()
-	ticker := time.NewTicker(m.config.CheckInterval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		m.checkAll()
+func getMaxHistory() int {
+	historyStr := os.Getenv("MAX_CHECK_HISTORY")
+	if historyStr == "" {
+		return 168
 	}
+
+	history, err := strconv.Atoi(historyStr)
+	if err != nil || history < 1 {
+		log.Printf("Invalid MAX_CHECK_HISTORY, using default 168")
+		return 168
+	}
+
+	return history
 }
 
-func (m *Monitor) checkAll() {
-	m.mu.RLock()
-	instances := m.instances
-	m.mu.RUnlock()
-
-	log.Printf("Starting check cycle for %d instances", len(instances))
-	start := time.Now()
-
-	var wg sync.WaitGroup
-	for _, instance := range instances {
-		wg.Add(1)
-		go func(inst *Instance) {
-			defer wg.Done()
-			m.checkInstance(inst)
-		}(instance)
+func getSSEKeepalive() int {
+	keepaliveStr := os.Getenv("SSE_KEEPALIVE_SECONDS")
+	if keepaliveStr == "" {
+		return 30
 	}
-	wg.Wait()
 
-	log.Printf("Check cycle completed in %v", time.Since(start))
-	m.broadcastUpdate()
+	seconds, err := strconv.Atoi(keepaliveStr)
+	if err != nil || seconds < 1 {
+		log.Printf("Invalid SSE_KEEPALIVE_SECONDS, using default 30")
+		return 30
+	}
+
+	return seconds
 }
 
-func (m *Monitor) checkInstance(instance *Instance) {
-	start := time.Now()
-
-	var checkURL string
-	if instance.InstanceType == "api" {
-		checkURL = fmt.Sprintf("%s/search/?s=kanye", instance.URL)
-	} else {
-		checkURL = instance.URL
-	}
-
-	client := &http.Client{
-		Timeout: m.config.RequestTimeout,
-	}
-
-	check := Check{
-		Timestamp: start,
-	}
-
-	resp, err := client.Get(checkURL)
-	if err != nil {
-		check.Success = false
-		check.Error = err.Error()
-		check.ResponseTime = time.Since(start).Milliseconds()
-	} else {
-		defer resp.Body.Close()
-		check.StatusCode = resp.StatusCode
-		check.ResponseTime = time.Since(start).Milliseconds()
-		check.Success = resp.StatusCode >= 200 && resp.StatusCode < 300
-	}
-
-	instance.mu.Lock()
-	instance.Checks = append(instance.Checks, check)
-	if len(instance.Checks) > m.config.MaxCheckHistory {
-		instance.Checks = instance.Checks[len(instance.Checks)-m.config.MaxCheckHistory:]
-	}
-	instance.mu.Unlock()
-
-	if m.config.LogLevel == "debug" {
-		log.Printf("[%d] %s (%s): success=%v, status=%d, time=%dms",
-			instance.Index, instance.URL, instance.InstanceType,
-			check.Success, check.StatusCode, check.ResponseTime)
-	}
-}
-
-func (m *Monitor) broadcastUpdate() {
-	data := m.GetInstancesData()
-	stats := m.GetStatsData()
-
-	update := map[string]interface{}{
-		"instances": data,
-		"stats":     stats,
-		"timestamp": time.Now().Unix(),
-	}
-
-	jsonData, err := json.Marshal(update)
-	if err != nil {
-		log.Printf("Error marshaling update: %v", err)
-		return
-	}
-
-	m.clientsMu.RLock()
-	clientCount := len(m.clients)
-	m.clientsMu.RUnlock()
-
-	if clientCount > 0 {
-		m.clientsMu.RLock()
-		for client := range m.clients {
-			select {
-			case client <- jsonData:
-			default:
-				log.Printf("Warning: Client channel full, skipping update")
-			}
-		}
-		m.clientsMu.RUnlock()
-		log.Printf("Broadcast update to %d clients", clientCount)
-	}
-}
-
-func (m *Monitor) GetInstancesData() interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	type InstanceData struct {
-		Group           string  `json:"group"`
-		URL             string  `json:"url"`
-		InstanceType    string  `json:"instance_type"`
-		GroupOrder      int     `json:"group_order"`
-		Index           int     `json:"index"`
-		Checks          []Check `json:"checks"`
-		Uptime          float64 `json:"uptime"`
-		AvgResponseTime int64   `json:"avg_response_time"`
-		LastCheck       *Check  `json:"last_check"`
-	}
-
-	data := make([]InstanceData, 0, len(m.instances))
-
-	for _, instance := range m.instances {
-		instance.mu.RLock()
-
-		uptime := calculateUptime(instance.Checks)
-		avgRT := calculateAvgResponseTime(instance.Checks)
-		var lastCheck *Check
-		if len(instance.Checks) > 0 {
-			lastCheck = &instance.Checks[len(instance.Checks)-1]
-		}
-
-		checks := make([]Check, len(instance.Checks))
-		copy(checks, instance.Checks)
-
-		data = append(data, InstanceData{
-			Group:           instance.Group,
-			URL:             instance.URL,
-			InstanceType:    instance.InstanceType,
-			GroupOrder:      instance.GroupOrder,
-			Index:           instance.Index,
-			Checks:          checks,
-			Uptime:          uptime,
-			AvgResponseTime: avgRT,
-			LastCheck:       lastCheck,
-		})
-
-		instance.mu.RUnlock()
-	}
-
-	return data
-}
-
-func (m *Monitor) GetStatsData() interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	totalInstances := len(m.instances)
-	upInstances := 0
-	totalUptime := 0.0
-
-	for _, instance := range m.instances {
-		instance.mu.RLock()
-		if len(instance.Checks) > 0 && instance.Checks[len(instance.Checks)-1].Success {
-			upInstances++
-		}
-		totalUptime += calculateUptime(instance.Checks)
-		instance.mu.RUnlock()
-	}
-
-	avgUptime := 0.0
-	if totalInstances > 0 {
-		avgUptime = totalUptime / float64(totalInstances)
-	}
-
-	return map[string]interface{}{
-		"total_instances": totalInstances,
-		"up_instances":    upInstances,
-		"avg_uptime":      avgUptime,
-	}
-}
-
-func (m *Monitor) RegisterClient(client chan []byte) {
-	m.clientsMu.Lock()
-	m.clients[client] = true
-	m.clientsMu.Unlock()
-	log.Printf("Client connected, total clients: %d", len(m.clients))
-}
-
-func (m *Monitor) UnregisterClient(client chan []byte) {
-	m.clientsMu.Lock()
-	delete(m.clients, client)
-	clientCount := len(m.clients)
-	m.clientsMu.Unlock()
-	close(client)
-	log.Printf("Client disconnected, total clients: %d", clientCount)
-}
-
-func calculateUptime(checks []Check) float64 {
-	if len(checks) == 0 {
-		return 0
-	}
-
-	successful := 0
-	for _, check := range checks {
-		if check.Success {
-			successful++
-		}
-	}
-
-	return (float64(successful) / float64(len(checks))) * 100
-}
-
-func calculateAvgResponseTime(checks []Check) int64 {
-	if len(checks) == 0 {
-		return 0
-	}
-
-	total := int64(0)
-	for _, check := range checks {
-		total += check.ResponseTime
-	}
-
-	return total / int64(len(checks))
+func (c *Config) LogConfig() {
+	log.Printf("Configuration:")
+	log.Printf("  Port: %s", c.Port)
+	log.Printf("  Check Interval: %v", c.CheckInterval)
+	log.Printf("  Instances URL: %s", c.InstancesURL)
+	log.Printf("  Instance Refresh Interval: %v", c.InstanceRefreshInterval)
+	log.Printf("  Request Timeout: %v", c.RequestTimeout)
+	log.Printf("  Max Check History: %d", c.MaxCheckHistory)
+	log.Printf("  SSE Keepalive: %ds", c.SSEKeepaliveSeconds)
+	log.Printf("  Log Level: %s", c.LogLevel)
 }
